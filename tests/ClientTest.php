@@ -585,4 +585,249 @@ final class ClientTest extends TestCase
         $this->assertSame(200, $lastResponse->statusCode);
         $this->assertSame('req-abc', $lastResponse->headers['x-request-id']);
     }
+
+    public function testPostWithQueryParams(): void
+    {
+        $transport = $this->createMock(HttpTransportInterface::class);
+
+        $transport->expects($this->exactly(2))
+            ->method('send')
+            ->willReturnCallback(function (string $method, string $url, array $headers, ?string $body) {
+                if (str_contains($url, '/oauth2/token')) {
+                    return $this->tokenResponse();
+                }
+
+                $this->assertSame('POST', $method);
+                $this->assertStringContainsString('notify=true', $url);
+                $decoded = json_decode($body, true);
+                $this->assertSame('New Job', $decoded['name']);
+                return $this->apiResponse(['id' => 1, 'name' => 'New Job']);
+            });
+
+        $client = new Client(
+            clientId: 'id',
+            clientSecret: 'secret',
+            autoRefreshAuth: false,
+            transport: $transport,
+        );
+        $result = $client->post('/job', ['name' => 'New Job'], ['notify' => 'true']);
+
+        $this->assertSame(1, $result['id']);
+    }
+
+    public function testPutWithQueryParams(): void
+    {
+        $transport = $this->createMock(HttpTransportInterface::class);
+
+        $transport->expects($this->exactly(2))
+            ->method('send')
+            ->willReturnCallback(function (string $method, string $url, array $headers, ?string $body) {
+                if (str_contains($url, '/oauth2/token')) {
+                    return $this->tokenResponse();
+                }
+
+                $this->assertSame('PUT', $method);
+                $this->assertStringContainsString('notify=true', $url);
+                $decoded = json_decode($body, true);
+                $this->assertSame('Updated', $decoded['name']);
+                return $this->apiResponse(['id' => 1, 'name' => 'Updated']);
+            });
+
+        $client = new Client(
+            clientId: 'id',
+            clientSecret: 'secret',
+            autoRefreshAuth: false,
+            transport: $transport,
+        );
+        $result = $client->put('/job/1', ['name' => 'Updated'], ['notify' => 'true']);
+
+        $this->assertSame('Updated', $result['name']);
+    }
+
+    public function testDeleteWithQueryParams(): void
+    {
+        $transport = $this->createMock(HttpTransportInterface::class);
+
+        $transport->expects($this->exactly(2))
+            ->method('send')
+            ->willReturnCallback(function (string $method, string $url) {
+                if (str_contains($url, '/oauth2/token')) {
+                    return $this->tokenResponse();
+                }
+
+                $this->assertSame('DELETE', $method);
+                $this->assertStringContainsString('cascade=true', $url);
+                return new Response(204, '');
+            });
+
+        $client = new Client(
+            clientId: 'id',
+            clientSecret: 'secret',
+            autoRefreshAuth: false,
+            transport: $transport,
+        );
+        $client->delete('/job/1', ['cascade' => 'true']);
+    }
+
+    public function testEmptyResponseReturnsNull(): void
+    {
+        $transport = $this->createMock(HttpTransportInterface::class);
+
+        $transport->method('send')
+            ->willReturnCallback(function (string $method, string $url) {
+                if (str_contains($url, '/oauth2/token')) {
+                    return $this->tokenResponse();
+                }
+                return new Response(200, json_encode(['messages' => []]));
+            });
+
+        $client = new Client(
+            clientId: 'id',
+            clientSecret: 'secret',
+            autoRefreshAuth: false,
+            transport: $transport,
+        );
+        $result = $client->get('/job/1');
+
+        $this->assertNull($result);
+    }
+
+    public function testCustomBaseUrl(): void
+    {
+        $transport = $this->createMock(HttpTransportInterface::class);
+
+        $transport->method('send')
+            ->willReturnCallback(function (string $method, string $url) {
+                if (str_contains($url, '/oauth2/token')) {
+                    return $this->tokenResponse();
+                }
+
+                $this->assertStringStartsWith('https://staging.servicetrade.com/api/', $url);
+                return $this->apiResponse([]);
+            });
+
+        $client = new Client(
+            clientId: 'id',
+            clientSecret: 'secret',
+            baseUrl: 'https://staging.servicetrade.com',
+            autoRefreshAuth: false,
+            transport: $transport,
+        );
+        $client->get('/job/1');
+    }
+
+    public function testCustomApiPrefix(): void
+    {
+        $transport = $this->createMock(HttpTransportInterface::class);
+
+        $transport->method('send')
+            ->willReturnCallback(function (string $method, string $url) {
+                if (str_contains($url, '/oauth2/token')) {
+                    return $this->tokenResponse();
+                }
+
+                $this->assertStringContainsString('/api/v2/job/1', $url);
+                return $this->apiResponse([]);
+            });
+
+        $client = new Client(
+            clientId: 'id',
+            clientSecret: 'secret',
+            apiPrefix: '/api/v2',
+            autoRefreshAuth: false,
+            transport: $transport,
+        );
+        $client->get('/job/1');
+    }
+
+    public function testCustomUserAgent(): void
+    {
+        $transport = $this->createMock(HttpTransportInterface::class);
+
+        $transport->method('send')
+            ->willReturnCallback(function (string $method, string $url) {
+                if (str_contains($url, '/oauth2/token')) {
+                    return $this->tokenResponse();
+                }
+                return $this->apiResponse([]);
+            });
+
+        $client = new Client(
+            clientId: 'id',
+            clientSecret: 'secret',
+            userAgent: 'MyApp/1.0',
+            autoRefreshAuth: false,
+            transport: $transport,
+        );
+        $result = $client->get('/test');
+
+        $this->assertIsArray($result);
+    }
+
+    public function testOnSetAuthCallbackViaClient(): void
+    {
+        $callbackToken = null;
+
+        $transport = $this->createMock(HttpTransportInterface::class);
+
+        $transport->method('send')
+            ->willReturnCallback(function (string $method, string $url) {
+                if (str_contains($url, '/oauth2/token')) {
+                    return $this->tokenResponse();
+                }
+                return $this->apiResponse([]);
+            });
+
+        $client = new Client(
+            clientId: 'id',
+            clientSecret: 'secret',
+            autoRefreshAuth: false,
+            onSetAuth: function (string $token) use (&$callbackToken) {
+                $callbackToken = $token;
+            },
+            transport: $transport,
+        );
+
+        $client->connect();
+
+        $this->assertSame($this->testToken, $callbackToken);
+    }
+
+    public function testOnUnsetAuthCallbackViaClient(): void
+    {
+        $disconnectCalled = false;
+
+        $transport = $this->createMock(HttpTransportInterface::class);
+
+        $transport->method('send')
+            ->willReturnCallback(function (string $method, string $url) {
+                if (str_contains($url, '/oauth2/token')) {
+                    return $this->tokenResponse();
+                }
+                // Revoke endpoint
+                return new Response(200, '');
+            });
+
+        $client = new Client(
+            clientId: 'id',
+            clientSecret: 'secret',
+            autoRefreshAuth: false,
+            onUnsetAuth: function () use (&$disconnectCalled) {
+                $disconnectCalled = true;
+            },
+            transport: $transport,
+        );
+
+        $client->connect();
+        $client->disconnect();
+
+        $this->assertTrue($disconnectCalled);
+    }
+
+    public function testVersionReturnsString(): void
+    {
+        $version = Client::version();
+        $this->assertIsString($version);
+        $this->assertNotEmpty($version);
+    }
 }

@@ -176,4 +176,37 @@ final class PaginatorTest extends TestCase
         $paginator = new Paginator($client, '/jobs', 'jobs', ['status' => 'scheduled']);
         iterator_to_array($paginator);
     }
+
+    public function testMissingItemsKeyReturnsEmpty(): void
+    {
+        $transport = $this->createMock(HttpTransportInterface::class);
+
+        $transport->method('send')
+            ->willReturnCallback(function (string $method, string $url) {
+                if (str_contains($url, '/oauth2/token')) {
+                    return $this->tokenResponse();
+                }
+
+                // Response has data but the expected items key is missing
+                return new Response(200, json_encode([
+                    'data' => [
+                        'page' => 1,
+                        'totalPages' => 1,
+                    ],
+                    'messages' => [],
+                ]));
+            });
+
+        $client = new Client(
+            clientId: 'id',
+            clientSecret: 'secret',
+            autoRefreshAuth: false,
+            transport: $transport,
+        );
+
+        $paginator = new Paginator($client, '/jobs', 'jobs');
+        $items = iterator_to_array($paginator);
+
+        $this->assertSame([], $items);
+    }
 }
