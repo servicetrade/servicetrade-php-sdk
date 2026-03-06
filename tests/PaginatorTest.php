@@ -30,44 +30,55 @@ final class PaginatorTest extends TestCase
         ]));
     }
 
-    public function testIteratesAllPages(): void
+    private function makeTransport(callable $apiHandler): HttpTransportInterface
     {
         $transport = $this->createMock(HttpTransportInterface::class);
 
         $transport->method('send')
-            ->willReturnCallback(function (string $method, string $url) {
+            ->willReturnCallback(function (string $method, string $url, array $headers = [], ?string $body = null, array $options = []) use ($apiHandler) {
                 if (str_contains($url, '/oauth2/token')) {
                     return $this->tokenResponse();
                 }
-
-                parse_str(parse_url($url, PHP_URL_QUERY) ?? '', $query);
-                $page = (int) ($query['page'] ?? 1);
-
-                $jobs = match ($page) {
-                    1 => [['id' => 1], ['id' => 2]],
-                    2 => [['id' => 3], ['id' => 4]],
-                    3 => [['id' => 5]],
-                    default => [],
-                };
-
-                return new Response(200, json_encode([
-                    'data' => [
-                        'jobs' => $jobs,
-                        'page' => $page,
-                        'totalPages' => 3,
-                    ],
-                    'messages' => [],
-                ]));
+                return $apiHandler($method, $url, $headers, $body, $options);
             });
 
-        $client = new Client(
+        return $transport;
+    }
+
+    private function makeClient(HttpTransportInterface $transport): Client
+    {
+        return new Client(
             clientId: 'id',
             clientSecret: 'secret',
             autoRefreshAuth: false,
             transport: $transport,
         );
+    }
 
-        $paginator = new Paginator($client, '/jobs', 'jobs');
+    public function testIteratesAllPages(): void
+    {
+        $transport = $this->makeTransport(function (string $method, string $url) {
+            parse_str(parse_url($url, PHP_URL_QUERY) ?? '', $query);
+            $page = (int) ($query['page'] ?? 1);
+
+            $jobs = match ($page) {
+                1 => [['id' => 1], ['id' => 2]],
+                2 => [['id' => 3], ['id' => 4]],
+                3 => [['id' => 5]],
+                default => [],
+            };
+
+            return new Response(200, json_encode([
+                'data' => [
+                    'jobs' => $jobs,
+                    'page' => $page,
+                    'totalPages' => 3,
+                ],
+                'messages' => [],
+            ]));
+        });
+
+        $paginator = new Paginator($this->makeClient($transport), '/jobs', 'jobs');
         $allIds = [];
         foreach ($paginator as $job) {
             $allIds[] = $job['id'];
@@ -78,32 +89,16 @@ final class PaginatorTest extends TestCase
 
     public function testSinglePage(): void
     {
-        $transport = $this->createMock(HttpTransportInterface::class);
+        $transport = $this->makeTransport(fn() => new Response(200, json_encode([
+            'data' => [
+                'locations' => [['id' => 10]],
+                'page' => 1,
+                'totalPages' => 1,
+            ],
+            'messages' => [],
+        ])));
 
-        $transport->method('send')
-            ->willReturnCallback(function (string $method, string $url) {
-                if (str_contains($url, '/oauth2/token')) {
-                    return $this->tokenResponse();
-                }
-
-                return new Response(200, json_encode([
-                    'data' => [
-                        'locations' => [['id' => 10]],
-                        'page' => 1,
-                        'totalPages' => 1,
-                    ],
-                    'messages' => [],
-                ]));
-            });
-
-        $client = new Client(
-            clientId: 'id',
-            clientSecret: 'secret',
-            autoRefreshAuth: false,
-            transport: $transport,
-        );
-
-        $paginator = new Paginator($client, '/locations', 'locations');
+        $paginator = new Paginator($this->makeClient($transport), '/locations', 'locations');
         $items = iterator_to_array($paginator);
 
         $this->assertCount(1, $items);
@@ -112,32 +107,16 @@ final class PaginatorTest extends TestCase
 
     public function testEmptyResult(): void
     {
-        $transport = $this->createMock(HttpTransportInterface::class);
+        $transport = $this->makeTransport(fn() => new Response(200, json_encode([
+            'data' => [
+                'jobs' => [],
+                'page' => 1,
+                'totalPages' => 0,
+            ],
+            'messages' => [],
+        ])));
 
-        $transport->method('send')
-            ->willReturnCallback(function (string $method, string $url) {
-                if (str_contains($url, '/oauth2/token')) {
-                    return $this->tokenResponse();
-                }
-
-                return new Response(200, json_encode([
-                    'data' => [
-                        'jobs' => [],
-                        'page' => 1,
-                        'totalPages' => 0,
-                    ],
-                    'messages' => [],
-                ]));
-            });
-
-        $client = new Client(
-            clientId: 'id',
-            clientSecret: 'secret',
-            autoRefreshAuth: false,
-            transport: $transport,
-        );
-
-        $paginator = new Paginator($client, '/jobs', 'jobs');
+        $paginator = new Paginator($this->makeClient($transport), '/jobs', 'jobs');
         $items = iterator_to_array($paginator);
 
         $this->assertSame([], $items);
@@ -145,67 +124,37 @@ final class PaginatorTest extends TestCase
 
     public function testPassesQueryParams(): void
     {
-        $transport = $this->createMock(HttpTransportInterface::class);
+        $transport = $this->makeTransport(function (string $method, string $url) {
+            $this->assertStringContainsString('status=scheduled', $url);
+            $this->assertStringContainsString('page=1', $url);
 
-        $transport->method('send')
-            ->willReturnCallback(function (string $method, string $url) {
-                if (str_contains($url, '/oauth2/token')) {
-                    return $this->tokenResponse();
-                }
+            return new Response(200, json_encode([
+                'data' => [
+                    'jobs' => [['id' => 1]],
+                    'page' => 1,
+                    'totalPages' => 1,
+                ],
+                'messages' => [],
+            ]));
+        });
 
-                $this->assertStringContainsString('status=scheduled', $url);
-                $this->assertStringContainsString('page=1', $url);
-
-                return new Response(200, json_encode([
-                    'data' => [
-                        'jobs' => [['id' => 1]],
-                        'page' => 1,
-                        'totalPages' => 1,
-                    ],
-                    'messages' => [],
-                ]));
-            });
-
-        $client = new Client(
-            clientId: 'id',
-            clientSecret: 'secret',
-            autoRefreshAuth: false,
-            transport: $transport,
-        );
-
-        $paginator = new Paginator($client, '/jobs', 'jobs', ['status' => 'scheduled']);
+        $paginator = new Paginator($this->makeClient($transport), '/jobs', 'jobs', ['status' => 'scheduled']);
         iterator_to_array($paginator);
     }
 
     public function testMissingItemsKeyReturnsEmpty(): void
     {
-        $transport = $this->createMock(HttpTransportInterface::class);
-
-        $transport->method('send')
-            ->willReturnCallback(function (string $method, string $url) {
-                if (str_contains($url, '/oauth2/token')) {
-                    return $this->tokenResponse();
-                }
-
-                return new Response(200, json_encode([
-                    'data' => [
-                        'jobs' => [['id' => 1]],
-                        'page' => 1,
-                        'totalPages' => 1,
-                    ],
-                    'messages' => [],
-                ]));
-            });
-
-        $client = new Client(
-            clientId: 'id',
-            clientSecret: 'secret',
-            autoRefreshAuth: false,
-            transport: $transport,
-        );
+        $transport = $this->makeTransport(fn() => new Response(200, json_encode([
+            'data' => [
+                'jobs' => [['id' => 1]],
+                'page' => 1,
+                'totalPages' => 1,
+            ],
+            'messages' => [],
+        ])));
 
         // itemsKey 'foobar' doesn't match the 'jobs' key in the response
-        $paginator = new Paginator($client, '/jobs', 'foobar');
+        $paginator = new Paginator($this->makeClient($transport), '/jobs', 'foobar');
         $items = iterator_to_array($paginator);
 
         $this->assertSame([], $items);
