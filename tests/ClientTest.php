@@ -209,6 +209,21 @@ final class ClientTest extends TestCase
         $this->assertSame(99, $result['id']);
     }
 
+    public function testPostWithQueryParams(): void
+    {
+        $transport = $this->makeTransport(function (string $method, string $url, array $headers, ?string $body) {
+            $this->assertSame('POST', $method);
+            $this->assertStringContainsString('notify=true', $url);
+            $decoded = json_decode($body, true);
+            $this->assertSame('New Job', $decoded['name']);
+            return $this->apiResponse(['id' => 1, 'name' => 'New Job']);
+        });
+
+        $result = $this->makeClient($transport)->post('/job', ['name' => 'New Job'], ['notify' => 'true']);
+
+        $this->assertSame(1, $result['id']);
+    }
+
     public function testPut(): void
     {
         $transport = $this->makeTransport(function (string $method) {
@@ -221,6 +236,21 @@ final class ClientTest extends TestCase
         $this->assertSame('Updated', $result['name']);
     }
 
+    public function testPutWithQueryParams(): void
+    {
+        $transport = $this->makeTransport(function (string $method, string $url, array $headers, ?string $body) {
+            $this->assertSame('PUT', $method);
+            $this->assertStringContainsString('notify=true', $url);
+            $decoded = json_decode($body, true);
+            $this->assertSame('Updated', $decoded['name']);
+            return $this->apiResponse(['id' => 1, 'name' => 'Updated']);
+        });
+
+        $result = $this->makeClient($transport)->put('/job/1', ['name' => 'Updated'], ['notify' => 'true']);
+
+        $this->assertSame('Updated', $result['name']);
+    }
+
     public function testDelete(): void
     {
         $transport = $this->makeTransport(function (string $method) {
@@ -229,6 +259,17 @@ final class ClientTest extends TestCase
         });
 
         $this->makeClient($transport)->delete('/job/1'); // Should not throw
+    }
+
+    public function testDeleteWithQueryParams(): void
+    {
+        $transport = $this->makeTransport(function (string $method, string $url) {
+            $this->assertSame('DELETE', $method);
+            $this->assertStringContainsString('cascade=true', $url);
+            return new Response(204, '');
+        });
+
+        $this->makeClient($transport)->delete('/job/1', ['cascade' => 'true']);
     }
 
     public function testDeleteThrowsOnError(): void
@@ -381,6 +422,15 @@ final class ClientTest extends TestCase
     // Response handling
     // ---------------------------------------------------------------
 
+    public function testEmptyResponseReturnsNull(): void
+    {
+        $transport = $this->makeTransport(fn() => new Response(200, json_encode(['messages' => []])));
+
+        $result = $this->makeClient($transport)->get('/job/1');
+
+        $this->assertNull($result);
+    }
+
     public function testGetLastResponse(): void
     {
         $transport = $this->makeTransport(fn() => new Response(200, json_encode(['data' => ['id' => 1], 'messages' => []]), [
@@ -415,6 +465,26 @@ final class ClientTest extends TestCase
         $client->get('/test');
     }
 
+    public function testCustomBaseUrl(): void
+    {
+        $transport = $this->makeTransport(function (string $method, string $url) {
+            $this->assertStringStartsWith('https://staging.servicetrade.com/api/', $url);
+            return $this->apiResponse([]);
+        });
+
+        $this->makeClient($transport, ['baseUrl' => 'https://staging.servicetrade.com'])->get('/job/1');
+    }
+
+    public function testCustomApiPrefix(): void
+    {
+        $transport = $this->makeTransport(function (string $method, string $url) {
+            $this->assertStringContainsString('/api/v2/job/1', $url);
+            return $this->apiResponse([]);
+        });
+
+        $this->makeClient($transport, ['apiPrefix' => '/api/v2'])->get('/job/1');
+    }
+
     public function testBuildUrlNormalizesSlashes(): void
     {
         $transport = $this->makeTransport(function (string $method, string $url) {
@@ -426,5 +496,73 @@ final class ClientTest extends TestCase
 
         // apiPrefix with trailing slash, path without leading slash
         $this->makeClient($transport, ['apiPrefix' => '/api/'])->get('job/1');
+    }
+
+    // ---------------------------------------------------------------
+    // Callbacks
+    // ---------------------------------------------------------------
+
+    public function testOnSetAuthCallbackViaClient(): void
+    {
+        $callbackTokens = [];
+        $tokenA = $this->makeJwt(time() + 3600);
+        $tokenB = $this->makeJwt(time() + 7200);
+        $tokenCall = 0;
+
+        $transport = $this->createMock(HttpTransportInterface::class);
+        $transport->method('send')
+            ->willReturnCallback(function (string $method, string $url) use ($tokenA, $tokenB, &$tokenCall) {
+                if (str_contains($url, '/oauth2/token')) {
+                    $token = ++$tokenCall === 1 ? $tokenA : $tokenB;
+                    return new Response(200, json_encode([
+                        'access_token' => $token,
+                        'expires_in' => 86400,
+                        'token_type' => 'Bearer',
+                    ]));
+                }
+                return new Response(200, '');
+            });
+
+        $client = $this->makeClient($transport, [
+            'onSetAuth' => function (string $token) use (&$callbackTokens) {
+                $callbackTokens[] = $token;
+            },
+        ]);
+
+        $client->connect();
+        $this->assertSame([$tokenA], $callbackTokens);
+
+        $client->disconnect();
+        $client->connect();
+        $this->assertSame([$tokenA, $tokenB], $callbackTokens);
+    }
+
+    public function testOnUnsetAuthCallbackViaClient(): void
+    {
+        $disconnectCalled = false;
+
+        $transport = $this->makeTransport(fn() => new Response(200, ''));
+
+        $client = $this->makeClient($transport, [
+            'onUnsetAuth' => function () use (&$disconnectCalled) {
+                $disconnectCalled = true;
+            },
+        ]);
+
+        $client->connect();
+        $client->disconnect();
+
+        $this->assertTrue($disconnectCalled);
+    }
+
+    // ---------------------------------------------------------------
+    // Misc
+    // ---------------------------------------------------------------
+
+    public function testVersionReturnsString(): void
+    {
+        $version = Client::version();
+        $this->assertIsString($version);
+        $this->assertNotEmpty($version);
     }
 }

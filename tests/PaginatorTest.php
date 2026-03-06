@@ -187,9 +187,9 @@ final class PaginatorTest extends TestCase
                     return $this->tokenResponse();
                 }
 
-                // Response has data but the expected items key is missing
                 return new Response(200, json_encode([
                     'data' => [
+                        'jobs' => [['id' => 1]],
                         'page' => 1,
                         'totalPages' => 1,
                     ],
@@ -204,7 +204,8 @@ final class PaginatorTest extends TestCase
             transport: $transport,
         );
 
-        $paginator = new Paginator($client, '/jobs', 'jobs');
+        // itemsKey 'foobar' doesn't match the 'jobs' key in the response
+        $paginator = new Paginator($client, '/jobs', 'foobar');
         $items = iterator_to_array($paginator);
 
         $this->assertSame([], $items);
