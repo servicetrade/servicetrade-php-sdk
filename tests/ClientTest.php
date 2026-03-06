@@ -75,8 +75,8 @@ final class ClientTest extends TestCase
     private function makeClient(HttpTransportInterface $transport, array $overrides = []): Client
     {
         return new Client(
-            clientId: $overrides['clientId'] ?? 'id',
-            clientSecret: $overrides['clientSecret'] ?? 'secret',
+            clientId: array_key_exists('clientId', $overrides) ? $overrides['clientId'] : 'id',
+            clientSecret: array_key_exists('clientSecret', $overrides) ? $overrides['clientSecret'] : 'secret',
             refreshToken: $overrides['refreshToken'] ?? null,
             token: $overrides['token'] ?? null,
             baseUrl: $overrides['baseUrl'] ?? 'https://api.servicetrade.com',
@@ -156,8 +156,9 @@ final class ClientTest extends TestCase
         // Should never call the token endpoint
         $transport->expects($this->once())
             ->method('send')
-            ->willReturnCallback(function (string $method, string $url) {
+            ->willReturnCallback(function (string $method, string $url, array $headers) {
                 $this->assertStringNotContainsString('/oauth2/token', $url);
+                $this->assertSame('Bearer my_bearer_token', $headers['Authorization'] ?? null);
                 return $this->apiResponse(['ok' => true]);
             });
 
@@ -299,6 +300,7 @@ final class ClientTest extends TestCase
                 $this->assertArrayHasKey('uploadedFile', $options['multipart']);
                 $this->assertInstanceOf(\CURLFile::class, $options['multipart']['uploadedFile']);
                 $this->assertSame('job', $options['multipart']['entityType']);
+                $this->assertSame(1, $options['multipart']['entityId']);
 
                 return $this->apiResponse(['id' => 55]);
             });
@@ -488,9 +490,7 @@ final class ClientTest extends TestCase
     public function testBuildUrlNormalizesSlashes(): void
     {
         $transport = $this->makeTransport(function (string $method, string $url) {
-            // Should be normalized regardless of input slashes
-            $this->assertStringContainsString('/api/job/1', $url);
-            $this->assertStringNotContainsString('//job', $url);
+            $this->assertSame('https://api.servicetrade.com/api/job/1', $url);
             return $this->apiResponse([]);
         });
 
